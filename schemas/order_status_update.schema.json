@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "order_status_update.schema.json",
+  "title": "OrderStatusUpdate",
+  "description": "Canonical schema for vendor-originated order status update events.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "required": [
+    "externalEventId",
+    "receivedAt",
+    "vendorOrderKey",
+    "status"
+  ],
+
+  "properties": {
+    "vendorId": {
+      "type": "string",
+      "description": "Internal vendor identifier derived from authentication. Not trusted if provided by vendor."
+    },
+
+    "externalEventId": {
+      "type": "string",
+      "description": "Vendor-provided stable idempotency key used for deduplication."
+    },
+
+    "receivedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server-generated UTC timestamp when the event was ingested."
+    },
+
+    "sourceTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Optional vendor-provided UTC timestamp indicating when the change occurred."
+    },
+
+    "vendorOrderKey": {
+      "type": "string",
+      "description": "Vendor-specific order identifier."
+    },
+
+    "status": {
+      "type": "string",
+      "enum": [
+        "CREATED",
+        "ACKED",
+        "PICKED",
+        "SHIPPED",
+        "DELIVERED",
+        "CANCELED"
+      ],
+      "description": "Canonical order status value."
+    },
+
+    "metadata": {
+      "type": "object",
+      "description": "Optional vendor-provided metadata carried through the pipeline.",
+      "additionalProperties": true
+    }
+  }
+}

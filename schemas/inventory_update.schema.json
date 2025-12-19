@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "inventory_update.schema.json",
+  "title": "InventoryUpdate",
+  "description": "Canonical schema for vendor-originated inventory update events.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "required": [
+    "externalEventId",
+    "receivedAt",
+    "vendorProductKey",
+    "quantity",
+    "unit",
+    "semantics"
+  ],
+
+  "properties": {
+    "vendorId": {
+      "type": "string",
+      "description": "Internal vendor identifier derived from authentication. Not trusted if provided by vendor."
+    },
+
+    "externalEventId": {
+      "type": "string",
+      "description": "Vendor-provided stable idempotency key used for deduplication."
+    },
+
+    "receivedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server-generated UTC timestamp when the event was ingested."
+    },
+
+    "sourceTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Optional vendor-provided UTC timestamp indicating when the change occurred."
+    },
+
+    "vendorProductKey": {
+      "type": "string",
+      "description": "Vendor-specific product identifier (e.g., SKU)."
+    },
+
+    "quantity": {
+      "type": "number",
+      "description": "Inventory quantity value. Interpretation depends on semantics."
+    },
+
+    "unit": {
+      "type": "string",
+      "enum": ["EACH"],
+      "description": "Unit of measure for quantity."
+    },
+
+    "semantics": {
+      "type": "string",
+      "enum": ["ABSOLUTE", "DELTA"],
+      "description": "Indicates whether quantity represents an absolute value or a delta to apply."
+    },
+
+    "locationKey": {
+      "type": "string",
+      "description": "Optional vendor-specific location identifier (warehouse, store, etc.)."
+    },
+
+    "metadata": {
+      "type": "object",
+      "description": "Optional vendor-provided metadata carried through the pipeline.",
+      "additionalProperties": true
+    }
+  }
+}
