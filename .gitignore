@@ -1,0 +1,15 @@
+# Environment variables
+.env
+.env.*
+
+# AWS
+.aws/
+
+# Build artifacts
+target/
+*.jar
+*.class
+dependency-reduced-pom.xml
+
+# IDE
+.vscode/
