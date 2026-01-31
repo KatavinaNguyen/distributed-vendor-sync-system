@@ -13,3 +13,9 @@ dependency-reduced-pom.xml
 
 # IDE
 .vscode/
+# Terraform
+**/.terraform/*
+**/*.tfstate
+**/*.tfstate.*
+**/crash.log
+**/.terraform.lock.hcl
