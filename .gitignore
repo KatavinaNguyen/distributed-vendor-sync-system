@@ -19,3 +19,7 @@ dependency-reduced-pom.xml
 **/*.tfstate.*
 **/crash.log
 **/.terraform.lock.hcl
+
+body.json
+key.json
+ddb-policy.json

@@ -215,6 +215,49 @@ Diagram references (including bucket policies and object lifecycle) are in `docs
 
 ---
 
+---
+
+## Verified Infrastructure & Idempotency Proof
+
+The following artifacts demonstrate that DVSS’s core guarantees are enforced
+in a **live AWS environment**, not just at the design level.
+
+### DynamoDB Idempotency Table (Terraform)
+
+The ingest idempotency index is provisioned via Terraform and keyed by
+`(vendorId, externalEventId)`.
+
+![Terraform – DynamoDB apply](docs/architecture/images/terraform-dynamodb-apply.png)
+
+This table enforces **at-most-once acceptance** using conditional writes at the
+storage layer.
+
+---
+
+### Lambda Deployment (Ingest)
+
+The ingest Lambda is deployed as a Java 17 function and updated via the AWS CLI.
+
+![Lambda update-function-code](docs/architecture/images/lambda-update-function-code.png)
+
+This confirms the ingest logic (including idempotency enforcement) is running
+in a real AWS Lambda environment.
+
+---
+
+### Idempotency Enforcement (DynamoDB Read)
+
+After submitting an ingest request, the resulting record can be read directly
+from DynamoDB using its composite key.
+
+![DynamoDB get-item proof](docs/architecture/images/dynamodb-idempotency-proof.png)
+
+Submitting the same request again with the same `(vendorId, externalEventId)`
+returns a **DUPLICATE** response while preserving the original `ingestId`,
+proving that idempotency is enforced end-to-end.
+
+---
+
 ## Performance Targets and Limits (Metrics that matter)
 
 These are the **tested operating ranges**:
