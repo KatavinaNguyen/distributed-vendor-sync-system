@@ -215,12 +215,11 @@ Diagram references (including bucket policies and object lifecycle) are in `docs
 
 ---
 
----
 
-## Verified Infrastructure & Idempotency Proof
+## Verified Infrastructure & Idempotency
 
 The following artifacts demonstrate that DVSS’s core guarantees are enforced
-in a **live AWS environment**, not just at the design level.
+in a **live AWS environment**.
 
 ### DynamoDB Idempotency Table (Terraform)
 
@@ -250,7 +249,7 @@ in a real AWS Lambda environment.
 After submitting an ingest request, the resulting record can be read directly
 from DynamoDB using its composite key.
 
-![DynamoDB get-item proof](docs/architecture/images/dynamodb-idempotency-proof.png)
+![DynamoDB get-item](docs/architecture/images/ingest-idempotency.png)
 
 Submitting the same request again with the same `(vendorId, externalEventId)`
 returns a **DUPLICATE** response while preserving the original `ingestId`,
@@ -463,3 +462,4 @@ Capabilities:
 * Inform downstream systems of data reliability levels
 
 This supports smarter downstream processing and more efficient resource allocation.
+
