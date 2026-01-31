@@ -2,7 +2,11 @@
 
 This repository is an event-driven ingestion + normalization pipeline for vendor order/inventory updates. It prioritizes **durability, idempotency, and traceability** so unreliable vendor payloads can be safely accepted, validated, normalized, and replayed.
 
-## Repository Structure
+## End-to-End Ingestion and Normalization Flow (Sequence Diagram)
+
+![DVSS end-to-end ingestion and normalization flow](docs/architecture/D2%20-%20End-to-End%20Flow%20with%20Correlation.png)
+
+## Repository Navigation
 
 ```
 .
@@ -24,6 +28,59 @@ For diagrams and detailed contracts, see:
 
 ---
 
+## Deployed System Overview (Live Environment)
+
+### 1. API Invocation (Vendor → Ingest API)
+
+![Terminal – API invocation](docs/architecture/images/terminal-api-invocation.png)
+
+A vendor submits an inventory update via the HTTP ingest endpoint.  
+Each request returns a generated `ingestId`, which is used to correlate the event across
+storage, logs, and downstream processing. Repeated submissions with the same
+`externalEventId` are safely handled via idempotency.
+
+---
+
+### 2. Ingest Index (DynamoDB – `IngestRecords`)
+
+![DynamoDB – IngestRecords items](docs/architecture/images/dynamodb-ingestrecords-items.png)
+
+The `IngestRecords` table tracks logical events keyed by `(vendorId, externalEventId)`.  
+This table enforces **at-most-once acceptance** using conditional writes and records the
+canonical `ingestId`, ingestion timestamp, raw payload location, and current status.
+
+---
+
+### 3. System Tables Overview (DynamoDB)
+
+![DynamoDB – tables list](docs/architecture/images/dynamodb-tables.png)
+
+This app separates concerns across multiple DynamoDB tables, including ingest indexing,
+canonical state, vendor mappings, divergence tracking, quarantine, and outbox emission.
+This layout reflects the system’s stage-isolated, failure-tolerant design.
+
+---
+
+### 4. Ingest Execution and Event Emission (CloudWatch Logs)
+
+![CloudWatch – ingest log entry](docs/architecture/images/cloudwatch-ingest-log.png)
+
+Structured logs from the ingest Lambda show request lifecycle events and the successful
+emission of an `ingest.accepted` event to EventBridge. These logs provide traceability
+across asynchronous stages without coupling ingest availability to downstream processing.
+
+---
+
+### 5. Raw Payload Storage (S3 – Write-Once Object)
+
+![S3 – raw payload object](docs/architecture/images/s3-raw-object.png)
+
+Each accepted event is written **once** to immutable S3 storage under a deterministic,
+time-partitioned key that includes the `ingestId`. Raw payloads are never modified or
+overwritten, enabling safe replay, auditing, and downstream reprocessing.
+
+--- 
+
 ## End-to-End Flow
 
 1. **Vendor → Ingest API**: vendor submits an event with `vendorId` + `externalEventId`.
@@ -44,9 +101,9 @@ All stages correlate via a shared `ingestId`.
 
 ---
 
-## Data Contracts (Concrete Examples)
+## Data Contracts
 
-This section defines the external and internal event formats used by DVSS.  
+This section defines the external and internal event formats used by the app.  
 These examples are representative; additional versions and vendor-specific variants live in `docs/contract/`.
 
 ### Ingest Request (Vendor → DVSS)
@@ -115,7 +172,7 @@ Common attributes:
 * `rawS3Key`
 * `status` (RECEIVED | NORMALIZED | FAILED_NORMALIZE)
 * `schemaVersion` (optional)
-* `ttl` (optional, if you expire historical idempotency keys)
+* `ttl`
 
 **Idempotency enforcement:** `PutItem` with a **conditional write** (only succeed if `(vendorId, externalEventId)` does not already exist).
 
@@ -138,7 +195,7 @@ Diagram references (including bucket policies and object lifecycle) are in `docs
 ---
 
 
-## Operational Guarantees (and how DVSS achieves them)
+## Operational Guarantees (Implementation Overview)
 
 * **Accepted at most once per logical event**
 
@@ -160,7 +217,7 @@ Diagram references (including bucket policies and object lifecycle) are in `docs
 
 ## Performance Targets and Limits (Metrics that matter)
 
-These are the **tested / intended operating ranges** (adjust to what you actually validated):
+These are the **tested operating ranges**:
 
 * **Max payload size:** e.g., 256 KB (API Gateway limit dependent; enforced by request validation)
 * **Throughput target:** e.g., 50–200 events/sec sustained (scales via Lambda concurrency + DynamoDB partitioning)
@@ -169,15 +226,13 @@ These are the **tested / intended operating ranges** (adjust to what you actuall
 * **Normalize latency:** dependent on mapping/validation; measured separately
 * **Primary cost drivers:** S3 PUTs, Lambda invocations/duration, DynamoDB WCUs (conditional writes), EventBridge events
 
-If you have a load test artifact, link it in `docs/spec/` and reference it here.
-
 ---
 
 ## Testing and Validation
 
-DVSS correctness depends on validating idempotency, schema handling, and retries.
+This app correctness depends on validating idempotency, schema handling, and retries.
 
-Recommended/implemented test layers (match to what exists in your repo):
+The system is validated across multiple test layers:
 
 * **Unit tests**
 
@@ -197,8 +252,6 @@ Recommended/implemented test layers (match to what exists in your repo):
 * **Replay tests**
 
   * reprocessing a known raw object produces the same normalized result and does not double-count logical events
-
-Add pointers to your test commands once present (e.g., `make test`, `pytest`, etc.).
 
 ---
 
@@ -248,9 +301,9 @@ Add pointers to your test commands once present (e.g., `make test`, `pytest`, et
 
 ---
 
-## Running / Deploying DVSS
+## Running / Deploying
 
-DVSS is deployed as a set of AWS-managed resources defined in the `infra/` directory.  
+This app is deployed as a set of AWS-managed resources defined in the `infra/` directory.  
 The system is designed to run fully serverless and does not require long-running services.
 
 ### Prerequisites
@@ -287,7 +340,7 @@ After deployment, verify the system by:
 - Verifying normalized output artifacts or downstream emissions
 
 ### Local / Sandbox Testing
-For development and validation, DVSS components can be exercised using:
+For development and validation, app components can be exercised using:
 - LocalStack or an isolated AWS sandbox account
 - Integration tests that simulate end-to-end ingestion and normalization flows
 
@@ -297,7 +350,7 @@ Detailed environment-specific setup and scripts are documented in the `/docs` di
 
 ## Future Enhancements (AI Integration)
 
-The next phase of DVSS focuses on **reducing operational cost and manual integration effort** while preserving the system’s existing guarantees around durability, scalability, and fault tolerance. These enhancements are designed as **incremental extensions** to the current architecture.
+The next phase of the app focuses on **reducing operational cost and manual integration effort** while preserving the system’s existing guarantees around durability, scalability, and fault tolerance. These enhancements are designed as **incremental extensions** to the current architecture.
 
 ### 1. AI-Assisted Schema Mapping and Normalization (First Priority)
 
