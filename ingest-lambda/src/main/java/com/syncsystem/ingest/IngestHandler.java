@@ -33,6 +33,23 @@ public class IngestHandler implements RequestHandler<APIGatewayProxyRequestEvent
     private final DynamoDbClient ddb = DynamoDbClient.builder().build();
     private final EventBridgeClient eb = EventBridgeClient.builder().build();
 
+    private String getExistingIngestId(String table, String vendorId, String externalEventId) {
+        Map<String, AttributeValue> key = new HashMap<>();
+        key.put("vendorId", AttributeValue.builder().s(vendorId).build());
+        key.put("externalEventId", AttributeValue.builder().s(externalEventId).build());
+
+        GetItemResponse resp = ddb.getItem(GetItemRequest.builder()
+                .tableName(table)
+                .key(key)
+                .consistentRead(false)
+                .build());
+
+        if (resp.item() == null || resp.item().isEmpty()) return null;
+        AttributeValue v = resp.item().get("ingestId");
+        return (v == null) ? null : v.s();
+    }
+
+
     @Override
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent request, Context context) {
         String requestId = context != null && context.getAwsRequestId() != null ? context.getAwsRequestId() : "unknown";
@@ -56,7 +73,6 @@ public class IngestHandler implements RequestHandler<APIGatewayProxyRequestEvent
             if (vendorId == null) {
                 return error(401, "INVALID_API_KEY", "API key is invalid or revoked.", requestId);
             }
-
             // 2) Basic body validation
             String body = request.getBody();
             if (body == null || body.isBlank()) {
@@ -97,8 +113,7 @@ public class IngestHandler implements RequestHandler<APIGatewayProxyRequestEvent
                 if (semantics == null || semantics.isBlank()) {
                     return error(400, "MISSING_REQUIRED_FIELD", "semantics is required.", requestId);
                 }
-
-            } else { // order-status-updates
+            } else {
                 String vendorOrderKey = extractJsonString(body, "vendorOrderKey");
                 if (vendorOrderKey == null || vendorOrderKey.isBlank()) {
                     return error(400, "MISSING_REQUIRED_FIELD", "vendorOrderKey is required.", requestId);
@@ -118,9 +133,34 @@ public class IngestHandler implements RequestHandler<APIGatewayProxyRequestEvent
             String bucket = requireEnv("RAW_BUCKET");
             String table = requireEnv("INGEST_TABLE");
 
-            // 5) Write raw payload to S3
+            // 5) Build S3 key (but do NOT write yet)
             String s3Key = "raw/vendorId=" + vendorId + "/receivedAt=" + receivedAt + "/" + ingestId + ".json";
 
+            // 6) Reserve idempotency in DynamoDB FIRST (this is the dedupe gate)
+            Map<String, AttributeValue> item = new HashMap<>();
+            item.put("vendorId", AttributeValue.builder().s(vendorId).build());
+            item.put("externalEventId", AttributeValue.builder().s(externalEventId).build());
+            item.put("ingestId", AttributeValue.builder().s(ingestId).build());
+            item.put("receivedAt", AttributeValue.builder().s(receivedAt).build());
+            item.put("s3Bucket", AttributeValue.builder().s(bucket).build());
+            item.put("s3Key", AttributeValue.builder().s(s3Key).build());
+            item.put("status", AttributeValue.builder().s("RECEIVED").build());
+
+            try {
+                ddb.putItem(PutItemRequest.builder()
+                        .tableName(table)
+                        .item(item)
+                        .conditionExpression("attribute_not_exists(vendorId)")
+                        .build());
+            } catch (ConditionalCheckFailedException dup) {
+                String existingIngestId = getExistingIngestId(table, vendorId, externalEventId);
+                return jsonResponse(202, Map.of(
+                        "status", "DUPLICATE",
+                        "ingestId", existingIngestId != null ? existingIngestId : ""
+                ));
+            }
+
+            // 7) Now write raw payload to S3 (first-seen only)
             PutObjectRequest putObj = PutObjectRequest.builder()
                     .bucket(bucket)
                     .key(s3Key)
@@ -135,46 +175,28 @@ public class IngestHandler implements RequestHandler<APIGatewayProxyRequestEvent
 
             s3.putObject(putObj, RequestBody.fromBytes(body.getBytes(StandardCharsets.UTF_8)));
 
-            // 6) Write ingest record to DynamoDB (idempotent by vendorId + externalEventId)
-            Map<String, AttributeValue> item = new HashMap<>();
-            item.put("vendorId", AttributeValue.builder().s(vendorId).build());
-            item.put("externalEventId", AttributeValue.builder().s(externalEventId).build());
-            item.put("ingestId", AttributeValue.builder().s(ingestId).build());
-            item.put("receivedAt", AttributeValue.builder().s(receivedAt).build());
-            item.put("s3Bucket", AttributeValue.builder().s(bucket).build());
-            item.put("s3Key", AttributeValue.builder().s(s3Key).build());
-            item.put("status", AttributeValue.builder().s("INGESTED").build());
-
-        try {
-            ddb.putItem(PutItemRequest.builder()
-                    .tableName(table)
-                    .item(item)
-                    .conditionExpression("attribute_not_exists(vendorId) AND attribute_not_exists(externalEventId)")
-                    .build());
 
             if (context != null && context.getLogger() != null) {
                 context.getLogger().log("EMITTING ingest.accepted to EventBridge\n");
             }
 
+            // 8) Emit EventBridge event
             PutEventsRequestEntry entry = PutEventsRequestEntry.builder()
-                .eventBusName("dvss-bus")
-                .source("dvss.ingest")
-                .detailType("ingest.accepted")
-                .detail("""
-                {
-                "vendorId": "%s",
-                "externalEventId": "%s",
-                "ingestId": "%s",
-                "receivedAt": "%s",
-                "s3Bucket": "%s",
-                "s3Key": "%s"
-                }
-                """.formatted(vendorId, externalEventId, ingestId, receivedAt, bucket, s3Key))
-                .build();
+                    .eventBusName("dvss-bus")
+                    .source("dvss.ingest")
+                    .detailType("ingest.accepted")
+                    .detail("""
+                    {
+                    "vendorId": "%s",
+                    "externalEventId": "%s",
+                    "ingestId": "%s",
+                    "receivedAt": "%s",
+                    "s3Bucket": "%s",
+                    "s3Key": "%s"
+                    }
+                    """.formatted(vendorId, externalEventId, ingestId, receivedAt, bucket, s3Key))
+                    .build();
 
-            eb.putEvents(PutEventsRequest.builder()
-                    .entries(entry)
-                    .build());
             var resp = eb.putEvents(PutEventsRequest.builder().entries(entry).build());
 
             if (context != null && context.getLogger() != null) {
@@ -184,22 +206,11 @@ public class IngestHandler implements RequestHandler<APIGatewayProxyRequestEvent
                 }
             }
 
-
-            if (context != null && context.getLogger() != null) {
-                context.getLogger().log("EMIT SUCCESS\n");
-            }
-
             return jsonResponse(202, Map.of(
                     "status", "ACCEPTED",
                     "ingestId", ingestId
             ));
 
-        } catch (ConditionalCheckFailedException dup) {
-            return jsonResponse(202, Map.of(
-                    "status", "DUPLICATE",
-                    "ingestId", ingestId
-            ));
-        }
 
         } catch (IllegalStateException env) {
             return error(500, "MISSING_ENV", env.getMessage(), requestId);
